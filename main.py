@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from fastapi.responses import RedirectResponse
 from database import engine, get_db
 import models
+from redis_client import redis_client
 
 # Create all tables on startup
 models.Base.metadata.create_all(bind=engine)
@@ -38,7 +39,12 @@ def shorten_url(request: URLRequest, db: Session = Depends(get_db)):
 
 @app.get("/{short_code}")
 def redirect_url(short_code: str, db: Session = Depends(get_db)):
+    cached_url = redis_client.get(short_code)
+    if cached_url:
+        return RedirectResponse(cached_url)
+    
     url_entry = db.query(models.URL).filter(models.URL.short_code == short_code).first()
     if url_entry:
+        redis_client.set(short_code, url_entry.long_url, ex=3600)
         return RedirectResponse(url_entry.long_url)
     return {"error": "Short code not found"}
