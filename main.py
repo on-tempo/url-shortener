@@ -7,12 +7,14 @@ from fastapi.responses import RedirectResponse
 from database import engine, get_db
 import models
 from redis_client import redis_client
+from datetime import datetime, timezone, timedelta
 
 # Create all tables on startup
 models.Base.metadata.create_all(bind=engine)
 
 class URLRequest(BaseModel):
     url: str
+    expires_in_days: int | None = None
 
 app = FastAPI()
 
@@ -31,7 +33,10 @@ def generate_endpoint():
 @app.post("/shorten")
 def shorten_url(request: URLRequest, db: Session = Depends(get_db)):
     short_code = generate_short_code()
-    new_url = models.URL(short_code = short_code, long_url = request.url)
+    expires_at = None
+    if request.expires_in_days:
+        expires_at = datetime.now(timezone.utc) + timedelta(days=request.expires_in_days)
+    new_url = models.URL(short_code = short_code, long_url = request.url, expires_at = expires_at)
     db.add(new_url)
     db.commit()
     db.refresh(new_url)
@@ -46,6 +51,8 @@ def redirect_url(short_code: str, db: Session = Depends(get_db)):
     
     url_entry = db.query(models.URL).filter(models.URL.short_code == short_code).first()
     if url_entry:
+        if url_entry.expires_at and url_entry.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
+            return {"error": "This link has expired"}
         redis_client.set(short_code, url_entry.long_url, ex=3600)
         redis_client.incr(f"clicks:{short_code}")
         return RedirectResponse(url_entry.long_url)
