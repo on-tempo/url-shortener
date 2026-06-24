@@ -41,11 +41,13 @@ def shorten_url(request: URLRequest, db: Session = Depends(get_db)):
 def redirect_url(short_code: str, db: Session = Depends(get_db)):
     cached_url = redis_client.get(short_code)
     if cached_url:
+        redis_client.incr(f"clicks:{short_code}")
         return RedirectResponse(cached_url)
     
     url_entry = db.query(models.URL).filter(models.URL.short_code == short_code).first()
     if url_entry:
         redis_client.set(short_code, url_entry.long_url, ex=3600)
+        redis_client.incr(f"clicks:{short_code}")
         return RedirectResponse(url_entry.long_url)
     return {"error": "Short code not found"}
 
@@ -58,3 +60,10 @@ def delete_url(short_code: str, db: Session = Depends(get_db)):
         redis_client.delete(short_code)
         return {"message": "Short code deleted successfully"}
     return {"error": "Short code not found"}
+
+@app.get("/{short_code}/clicks")
+def get_clicks(short_code: str, db: Session = Depends(get_db)):
+    clicks = redis_client.get(f"clicks:{short_code}")
+    if clicks is None:
+        clicks = 0
+    return {"short_code": short_code, "clicks": int(clicks)}
